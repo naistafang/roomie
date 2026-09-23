@@ -1,0 +1,1 @@
+ALTER TABLE `bookings` ADD `fees` text DEFAULT '[]' NOT NULL;

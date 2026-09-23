@@ -1,0 +1,1 @@
+CREATE INDEX `idx_bookings_property_check_in` ON `bookings` (`property_id`,`check_in`);

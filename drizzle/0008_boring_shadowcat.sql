@@ -1,0 +1,1 @@
+ALTER TABLE `bookings` ADD `cleaning_status` text DEFAULT 'not_clean' NOT NULL;

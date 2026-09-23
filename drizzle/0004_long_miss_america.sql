@@ -1,0 +1,1 @@
+ALTER TABLE `properties` ADD `highlight_color` text DEFAULT '#246bfd' NOT NULL;

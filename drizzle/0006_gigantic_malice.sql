@@ -1,0 +1,1 @@
+ALTER TABLE `bookings` ADD `booking_color` text DEFAULT '#246bfd' NOT NULL;

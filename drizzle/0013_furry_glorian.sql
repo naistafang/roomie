@@ -1,0 +1,1 @@
+ALTER TABLE `bookings` ADD `payment_method` text DEFAULT 'unspecified' NOT NULL;

@@ -1,0 +1,1 @@
+ALTER TABLE `properties` ADD `address` text DEFAULT '' NOT NULL;
