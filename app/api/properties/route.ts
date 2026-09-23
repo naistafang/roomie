@@ -1,8 +1,8 @@
-import { asc, desc } from "drizzle-orm";
+import { asc, desc, eq } from "drizzle-orm";
 import { getDb } from "../../../db";
 import { createAutomaticBackup } from "../../../db/backups";
 import { properties } from "../../../db/schema";
-import { getChatGPTUser } from "../../chatgpt-auth";
+import { requireAccount } from "../../chatgpt-auth";
 
 export const dynamic = "force-dynamic";
 
@@ -11,13 +11,15 @@ function validTime(value: unknown): value is string {
 }
 
 export async function GET() {
-  if (!(await getChatGPTUser())) return Response.json({ error: "Sign in required" }, { status: 401 });
-  const rows = await getDb().select().from(properties).orderBy(asc(properties.sortOrder), asc(properties.id));
+  const owner = await requireAccount();
+  if (owner instanceof Response) return owner;
+  const rows = await getDb().select().from(properties).where(eq(properties.ownerEmail, owner)).orderBy(asc(properties.sortOrder), asc(properties.id));
   return Response.json({ properties: rows });
 }
 
 export async function POST(request: Request) {
-  if (!(await getChatGPTUser())) return Response.json({ error: "Sign in required" }, { status: 401 });
+  const owner = await requireAccount();
+  if (owner instanceof Response) return owner;
   const body = (await request.json()) as { name?: string; address?: string; nightlyRate?: number; roomOptions?: unknown; highlightColor?: string; defaultCheckInTime?: string; defaultCheckOutTime?: string };
   const name = body.name?.trim();
   const address = body.address?.trim() ?? "";
@@ -32,9 +34,9 @@ export async function POST(request: Request) {
   if (!Number.isFinite(nightlyRate) || nightlyRate < 0) return Response.json({ error: "Enter a valid nightly price" }, { status: 400 });
   if (!roomOptions.length) return Response.json({ error: "Add at least one room option" }, { status: 400 });
   try {
-    await createAutomaticBackup("Before adding a property");
-    const [lastProperty] = await getDb().select({ sortOrder: properties.sortOrder }).from(properties).orderBy(desc(properties.sortOrder)).limit(1);
-    const [property] = await getDb().insert(properties).values({ name, address, roomOptions: JSON.stringify(roomOptions), highlightColor, nightlyRateCents: Math.round(nightlyRate * 100), defaultCheckInTime, defaultCheckOutTime, sortOrder: (lastProperty?.sortOrder ?? -1) + 1 }).returning();
+    await createAutomaticBackup(owner, "Before adding a property");
+    const [lastProperty] = await getDb().select({ sortOrder: properties.sortOrder }).from(properties).where(eq(properties.ownerEmail, owner)).orderBy(desc(properties.sortOrder)).limit(1);
+    const [property] = await getDb().insert(properties).values({ ownerEmail: owner, name, address, roomOptions: JSON.stringify(roomOptions), highlightColor, nightlyRateCents: Math.round(nightlyRate * 100), defaultCheckInTime, defaultCheckOutTime, sortOrder: (lastProperty?.sortOrder ?? -1) + 1 }).returning();
     return Response.json({ property }, { status: 201 });
   } catch {
     return Response.json({ error: "A property with that name already exists" }, { status: 409 });

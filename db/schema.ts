@@ -1,9 +1,11 @@
 import { sql } from "drizzle-orm";
-import { index, integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
+import { index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 
+// Every row belongs to the signed-in ChatGPT account (lowercased email) that created it.
 export const properties = sqliteTable("properties", {
   id: integer("id").primaryKey({ autoIncrement: true }),
-  name: text("name").notNull().unique(),
+  ownerEmail: text("owner_email").notNull().default(""),
+  name: text("name").notNull(),
   address: text("address").notNull().default(""),
   roomOptions: text("room_options").notNull().default('["Single room","Master room","Full"]'),
   highlightColor: text("highlight_color").notNull().default("#246bfd"),
@@ -12,12 +14,13 @@ export const properties = sqliteTable("properties", {
   defaultCheckOutTime: text("default_check_out_time").notNull().default("11:00"),
   sortOrder: integer("sort_order").notNull().default(0),
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
-});
+}, (table) => [uniqueIndex("properties_owner_name_unique").on(table.ownerEmail, table.name)]);
 
 export const bookings = sqliteTable(
   "bookings",
   {
     id: integer("id").primaryKey({ autoIncrement: true }),
+    ownerEmail: text("owner_email").notNull().default(""),
     propertyId: integer("property_id").notNull().references(() => properties.id, { onDelete: "cascade" }),
     guestName: text("guest_name").notNull(),
     guestPhone: text("guest_phone").notNull().default(""),
@@ -39,12 +42,16 @@ export const bookings = sqliteTable(
     fees: text("fees").notNull().default("[]"),
     createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
   },
-  (table) => [index("idx_bookings_property_check_in").on(table.propertyId, table.checkIn)],
+  (table) => [
+    index("idx_bookings_property_check_in").on(table.propertyId, table.checkIn),
+    index("idx_bookings_owner_check_in").on(table.ownerEmail, table.checkIn),
+  ],
 );
 
 export const backupSnapshots = sqliteTable("backup_snapshots", {
   id: integer("id").primaryKey({ autoIncrement: true }),
+  ownerEmail: text("owner_email").notNull().default(""),
   reason: text("reason").notNull(),
   payload: text("payload").notNull(),
   createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
-});
+}, (table) => [index("idx_backup_snapshots_owner").on(table.ownerEmail, table.id)]);

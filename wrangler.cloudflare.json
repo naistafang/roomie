@@ -1,0 +1,19 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "roomie",
+  "compatibility_date": "2026-05-15",
+  "compatibility_flags": ["nodejs_compat"],
+  "vars": {
+    "IDENTITY_SOURCE": "cloudflare-access",
+    "ACCESS_TEAM_DOMAIN": "wandering-tooth-2749.cloudflareaccess.com",
+    "ACCESS_AUD": "77501a34b1f9a89a25660fcf98570be0844a1823293291a8562844a5c60b2de2"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "roomie",
+      "database_id": "e70fd5f2-0db4-483f-8165-b4ad2057a3ec",
+      "migrations_dir": "drizzle"
+    }
+  ]
+}

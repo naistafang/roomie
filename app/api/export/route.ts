@@ -1,4 +1,4 @@
-import { asc } from "drizzle-orm";
+import { asc, eq } from "drizzle-orm";
 import { getDb } from "../../../db";
 import { bookings, properties } from "../../../db/schema";
 import { getChatGPTUser } from "../../chatgpt-auth";
@@ -8,11 +8,12 @@ export const dynamic = "force-dynamic";
 export async function GET() {
   const user = await getChatGPTUser();
   if (!user) return Response.json({ error: "Sign in required" }, { status: 401 });
+  const owner = user.email.trim().toLowerCase();
 
   const db = getDb();
   const [propertyRows, bookingRows] = await Promise.all([
-    db.select().from(properties).orderBy(asc(properties.name)),
-    db.select().from(bookings).orderBy(asc(bookings.checkIn)),
+    db.select().from(properties).where(eq(properties.ownerEmail, owner)).orderBy(asc(properties.name)),
+    db.select().from(bookings).where(eq(bookings.ownerEmail, owner)).orderBy(asc(bookings.checkIn)),
   ]);
   const exportedAt = new Date().toISOString();
   const fileDate = exportedAt.slice(0, 10);

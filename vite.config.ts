@@ -1,6 +1,8 @@
 import vinext from "vinext";
 import { defineConfig } from "vite";
 import hostingConfig from "./.openai/hosting.json";
+import cloudflareDeployConfig from "./wrangler.cloudflare.json";
+import { localSignIn } from "./build/local-sign-in-plugin";
 import { sites } from "./build/sites-vite-plugin";
 
 const SITE_CREATOR_PLACEHOLDER_DATABASE_ID =
@@ -33,6 +35,18 @@ const localBindingConfig = {
     : [],
 };
 
+// `npm run deploy:cloudflare` builds with ROOMIE_DEPLOY_TARGET=cloudflare to publish straight to your
+// own Cloudflare account (real D1 database, sign-in via Cloudflare Access). Other builds are unchanged.
+const deployToCloudflare = process.env.ROOMIE_DEPLOY_TARGET === "cloudflare";
+const cloudflareConfig = {
+  main: "./worker/index.ts",
+  name: cloudflareDeployConfig.name,
+  compatibility_date: cloudflareDeployConfig.compatibility_date,
+  compatibility_flags: cloudflareDeployConfig.compatibility_flags,
+  vars: cloudflareDeployConfig.vars,
+  d1_databases: cloudflareDeployConfig.d1_databases.map(({ binding, database_name, database_id }) => ({ binding, database_name, database_id })),
+};
+
 export default defineConfig(async () => {
   // Keep Wrangler and Miniflare state project-local. These are non-secret tool
   // settings; application environment belongs in ignored `.env*` files.
@@ -52,12 +66,13 @@ export default defineConfig(async () => {
         : {}),
     },
     plugins: [
+      localSignIn(),
       vinext(),
       sites(),
       cloudflare({
         viteEnvironment: { name: "rsc", childEnvironments: ["ssr"] },
         inspectorPort: false,
-        config: localBindingConfig,
+        config: deployToCloudflare ? cloudflareConfig : localBindingConfig,
       }),
     ],
   };

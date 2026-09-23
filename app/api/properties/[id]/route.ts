@@ -1,8 +1,8 @@
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { getDb } from "../../../../db";
 import { createAutomaticBackup } from "../../../../db/backups";
 import { properties } from "../../../../db/schema";
-import { getChatGPTUser } from "../../../chatgpt-auth";
+import { requireAccount } from "../../../chatgpt-auth";
 
 export const dynamic = "force-dynamic";
 
@@ -11,7 +11,8 @@ function validTime(value: unknown): value is string {
 }
 
 export async function PATCH(request: Request, context: { params: Promise<{ id: string }> }) {
-  if (!(await getChatGPTUser())) return Response.json({ error: "Sign in required" }, { status: 401 });
+  const owner = await requireAccount();
+  if (owner instanceof Response) return owner;
   const { id: rawId } = await context.params;
   const id = Number(rawId);
   const body = (await request.json()) as { name?: string; address?: string; nightlyRate?: number; roomOptions?: unknown; highlightColor?: string; defaultCheckInTime?: string; defaultCheckOutTime?: string };
@@ -29,7 +30,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
   if (!Number.isFinite(nightlyRate) || nightlyRate < 0) return Response.json({ error: "Enter a valid nightly price" }, { status: 400 });
   if (!roomOptions.length) return Response.json({ error: "Add at least one room option" }, { status: 400 });
   try {
-    await createAutomaticBackup("Before editing a property");
+    await createAutomaticBackup(owner, "Before editing a property");
     const [property] = await getDb().update(properties).set({
       name,
       address,
@@ -38,7 +39,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
       nightlyRateCents: Math.round(nightlyRate * 100),
       defaultCheckInTime,
       defaultCheckOutTime,
-    }).where(eq(properties.id, id)).returning();
+    }).where(and(eq(properties.id, id), eq(properties.ownerEmail, owner))).returning();
     if (!property) return Response.json({ error: "Property not found" }, { status: 404 });
     return Response.json({ property });
   } catch {
@@ -47,12 +48,13 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
 }
 
 export async function DELETE(_request: Request, context: { params: Promise<{ id: string }> }) {
-  if (!(await getChatGPTUser())) return Response.json({ error: "Sign in required" }, { status: 401 });
+  const owner = await requireAccount();
+  if (owner instanceof Response) return owner;
   const { id: rawId } = await context.params;
   const id = Number(rawId);
   if (!Number.isInteger(id) || id < 1) return Response.json({ error: "Invalid property" }, { status: 400 });
-  await createAutomaticBackup("Before deleting a property");
-  const [property] = await getDb().delete(properties).where(eq(properties.id, id)).returning();
+  await createAutomaticBackup(owner, "Before deleting a property");
+  const [property] = await getDb().delete(properties).where(and(eq(properties.id, id), eq(properties.ownerEmail, owner))).returning();
   if (!property) return Response.json({ error: "Property not found" }, { status: 404 });
   return Response.json({ property });
 }

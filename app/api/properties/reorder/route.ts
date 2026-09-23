@@ -1,13 +1,14 @@
-import { asc, eq } from "drizzle-orm";
+import { and, asc, eq } from "drizzle-orm";
 import { getDb } from "../../../../db";
 import { createAutomaticBackup } from "../../../../db/backups";
 import { properties } from "../../../../db/schema";
-import { getChatGPTUser } from "../../../chatgpt-auth";
+import { requireAccount } from "../../../chatgpt-auth";
 
 export const dynamic = "force-dynamic";
 
 export async function PATCH(request: Request) {
-  if (!(await getChatGPTUser())) return Response.json({ error: "Sign in required" }, { status: 401 });
+  const owner = await requireAccount();
+  if (owner instanceof Response) return owner;
   const body = (await request.json()) as { propertyIds?: unknown };
   const propertyIds = Array.isArray(body.propertyIds) ? body.propertyIds.map(Number) : [];
   if (!propertyIds.length || propertyIds.some((id) => !Number.isInteger(id) || id < 1) || new Set(propertyIds).size !== propertyIds.length) {
@@ -15,15 +16,15 @@ export async function PATCH(request: Request) {
   }
 
   const db = getDb();
-  const current = await db.select({ id: properties.id }).from(properties).orderBy(asc(properties.sortOrder), asc(properties.id));
+  const current = await db.select({ id: properties.id }).from(properties).where(eq(properties.ownerEmail, owner)).orderBy(asc(properties.sortOrder), asc(properties.id));
   if (current.length !== propertyIds.length || current.some((property) => !propertyIds.includes(property.id))) {
     return Response.json({ error: "Property list changed  reload and try again" }, { status: 409 });
   }
 
-  await createAutomaticBackup("Before reordering properties");
+  await createAutomaticBackup(owner, "Before reordering properties");
   for (const [sortOrder, id] of propertyIds.entries()) {
-    await db.update(properties).set({ sortOrder }).where(eq(properties.id, id));
+    await db.update(properties).set({ sortOrder }).where(and(eq(properties.id, id), eq(properties.ownerEmail, owner)));
   }
-  const reordered = await db.select().from(properties).orderBy(asc(properties.sortOrder), asc(properties.id));
+  const reordered = await db.select().from(properties).where(eq(properties.ownerEmail, owner)).orderBy(asc(properties.sortOrder), asc(properties.id));
   return Response.json({ properties: reordered });
 }

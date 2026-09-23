@@ -1,8 +1,8 @@
 import { and, asc, eq, gt, lt, ne } from "drizzle-orm";
 import { getDb } from "../../../db";
 import { createAutomaticBackup } from "../../../db/backups";
-import { bookings } from "../../../db/schema";
-import { getChatGPTUser } from "../../chatgpt-auth";
+import { bookings, properties } from "../../../db/schema";
+import { requireAccount } from "../../chatgpt-auth";
 
 export const dynamic = "force-dynamic";
 
@@ -31,17 +31,19 @@ function parseFees(value: unknown) {
 }
 
 export async function GET(request: Request) {
-  if (!(await getChatGPTUser())) return Response.json({ error: "Sign in required" }, { status: 401 });
+  const owner = await requireAccount();
+  if (owner instanceof Response) return owner;
   const propertyParam = new URL(request.url).searchParams.get("propertyId");
   const propertyId = Number(propertyParam);
   const rows = propertyParam && Number.isInteger(propertyId)
-    ? await getDb().select().from(bookings).where(eq(bookings.propertyId, propertyId)).orderBy(asc(bookings.checkIn))
-    : await getDb().select().from(bookings).orderBy(asc(bookings.checkIn));
+    ? await getDb().select().from(bookings).where(and(eq(bookings.ownerEmail, owner), eq(bookings.propertyId, propertyId))).orderBy(asc(bookings.checkIn))
+    : await getDb().select().from(bookings).where(eq(bookings.ownerEmail, owner)).orderBy(asc(bookings.checkIn));
   return Response.json({ bookings: rows });
 }
 
 export async function POST(request: Request) {
-  if (!(await getChatGPTUser())) return Response.json({ error: "Sign in required" }, { status: 401 });
+  const owner = await requireAccount();
+  if (owner instanceof Response) return owner;
   const body = (await request.json()) as Record<string, unknown>;
   const propertyId = Number(body.propertyId);
   const guestName = String(body.guestName ?? "").trim();
@@ -69,8 +71,10 @@ export async function POST(request: Request) {
   if (!Number.isFinite(nightlyPrice) || nightlyPrice < 0) return Response.json({ error: "Enter a valid nightly price" }, { status: 400 });
   if (!Number.isFinite(amountPaid) || amountPaid < 0) return Response.json({ error: "Enter a valid amount paid" }, { status: 400 });
   const db = getDb();
+  const [ownedProperty] = await db.select({ id: properties.id }).from(properties).where(and(eq(properties.id, propertyId), eq(properties.ownerEmail, owner))).limit(1);
+  if (!ownedProperty) return Response.json({ error: "Listing not found" }, { status: 404 });
   const overlap = await db.select({ id: bookings.id, roomLabel: bookings.roomLabel }).from(bookings).where(and(
-    eq(bookings.propertyId, propertyId), ne(bookings.status, "cancelled"), lt(bookings.checkIn, checkOut), gt(bookings.checkOut, checkIn)
+    eq(bookings.ownerEmail, owner), eq(bookings.propertyId, propertyId), ne(bookings.status, "cancelled"), lt(bookings.checkIn, checkOut), gt(bookings.checkOut, checkIn)
   ));
   const normalizedRoom = canonicalRoom(roomLabel);
   const conflicts = overlap.some((existing) => {
@@ -83,9 +87,9 @@ export async function POST(request: Request) {
   const amountPaidCents = Math.round(amountPaid * 100);
   const totalPriceCents = cents * nights + fees.reduce((sum, fee) => sum + fee.amountCents, 0);
   if (amountPaidCents > totalPriceCents) return Response.json({ error: "Amount paid cannot exceed the total" }, { status: 400 });
-  await createAutomaticBackup("Before adding a booking");
+  await createAutomaticBackup(owner, "Before adding a booking");
   const [booking] = await db.insert(bookings).values({
-    propertyId, guestName: guestName || "Blocked", guestPhone, guestEmail, guestCount, checkIn, checkOut, checkInTime, checkOutTime, nightlyPriceCents: cents,
+    ownerEmail: owner, propertyId, guestName: guestName || "Blocked", guestPhone, guestEmail, guestCount, checkIn, checkOut, checkInTime, checkOutTime, nightlyPriceCents: cents,
     totalPriceCents, amountPaidCents, paymentMethod, status, notes: String(body.notes ?? "").trim(), roomLabel, bookingColor, cleaningStatus, fees: JSON.stringify(fees),
   }).returning();
   return Response.json({ booking }, { status: 201 });

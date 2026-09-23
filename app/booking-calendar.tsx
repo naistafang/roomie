@@ -1,8 +1,8 @@
 "use client";
 
-import { type ChangeEvent, type CSSProperties, FormEvent, type PointerEvent as ReactPointerEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type ChangeEvent, type CSSProperties, FormEvent, memo, type PointerEvent as ReactPointerEvent, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { addDays, addMonths, differenceInCalendarDays, format, isSameMonth, parseISO, startOfMonth, startOfWeek, subMonths } from "date-fns";
-import { Building2, CalendarCheck, CalendarDays, ChevronLeft, ChevronRight, CirclePlus, Download, GripVertical, History, LockKeyhole, LogIn, LogOut, Mail, MapPin, MoreHorizontal, MoreVertical, Pencil, Plus, RotateCcw, Search, ShieldCheck, Sparkles, Trash2, Undo2, UserRound, Users, WalletCards, X } from "lucide-react";
+import { Building2, CalendarCheck, CalendarDays, ChevronLeft, ChevronRight, CirclePlus, Download, GripVertical, History, LockKeyhole, LogIn, LogOut, Mail, MapPin, MoreHorizontal, MoreVertical, Pencil, Plus, RotateCcw, Search, ShieldCheck, Sparkles, Trash2, Undo2, Users, WalletCards, X } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
@@ -46,14 +46,25 @@ const weekdayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const defaultRoomOptions = ["Single room", "Master room", "Full"];
 const bookingColors = ["#246BFD", "#EC6596", "#8B5CF6", "#16A085", "#E38B20", "#52637A"];
 
+// Intl formatters are expensive to construct on iOS Safari, so build each one once.
+const moneyFormat = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
+const preciseMoneyFormat = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" });
+const timeFormat = new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit" });
+
+// Property objects are replaced on every update, so caching by identity never goes stale.
+const roomOptionsCache = new WeakMap<Property, string[]>();
+
 function roomsFor(property: Property | null) {
   if (!property) return defaultRoomOptions;
+  const cached = roomOptionsCache.get(property);
+  if (cached) return cached;
+  let rooms = defaultRoomOptions;
   try {
     const options = JSON.parse(property.roomOptions);
-    return Array.isArray(options) && options.length ? options.map(String) : defaultRoomOptions;
-  } catch {
-    return defaultRoomOptions;
-  }
+    if (Array.isArray(options) && options.length) rooms = options.map(String);
+  } catch {}
+  roomOptionsCache.set(property, rooms);
+  return rooms;
 }
 
 function canonicalRoom(label: string) {
@@ -80,7 +91,11 @@ function unavailableRoomsForRange(property: Property | null, bookings: Booking[]
 }
 
 function money(cents: number) {
-  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(cents / 100);
+  return moneyFormat.format(cents / 100);
+}
+
+function preciseMoney(dollars: number) {
+  return preciseMoneyFormat.format(dollars);
 }
 
 function feesFor(booking: Booking): BookingFee[] {
@@ -92,15 +107,72 @@ function feesFor(booking: Booking): BookingFee[] {
   }
 }
 
+function paymentState(booking: Booking) {
+  if (booking.amountPaidCents >= booking.totalPriceCents) return "Paid";
+  if (booking.amountPaidCents > 0) return "Partial";
+  return "Unpaid";
+}
+
 function iso(date: Date) {
-  return format(date, "yyyy-MM-dd");
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
 }
 
 function displayTime(value: string) {
   const [hour, minute] = value.split(":").map(Number);
   if (!Number.isInteger(hour) || !Number.isInteger(minute)) return value;
-  return new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit" }).format(new Date(2000, 0, 1, hour, minute));
+  return timeFormat.format(new Date(2000, 0, 1, hour, minute));
 }
+
+type CalendarGridProps = {
+  days: Date[];
+  month: Date;
+  property: Property;
+  activeBookings: Booking[];
+  calendarBookings: Booking[];
+  laneById: Map<number, number>;
+  selectedDates: string[];
+  onDateTap: (date: Date) => void;
+  onOpenBooking: (booking: Booking) => void;
+};
+
+// Memoized so typing in dialogs or other state changes don't re-render all 42 day cells.
+const CalendarGrid = memo(function CalendarGrid({ days, month, property, activeBookings, calendarBookings, laneById, selectedDates, onDateTap, onOpenBooking }: CalendarGridProps) {
+  const cells = useMemo(() => {
+    const roomCount = roomsFor(property).length;
+    const price = money(property.nightlyRateCents);
+    return days.map((date) => {
+      const dateValue = iso(date);
+      const nextDateValue = iso(addDays(date, 1));
+      const bookingsOnDay = calendarBookings.filter((booking) => booking.checkIn <= dateValue && booking.checkOut >= dateValue);
+      const dateSelectable = unavailableRoomsForRange(property, activeBookings, dateValue, nextDateValue).size < roomCount;
+      const displayBookings: Array<Booking | null> = [null, null, null, null];
+      bookingsOnDay.forEach((booking) => {
+        const lane = laneById.get(booking.id);
+        if (lane !== undefined) displayBookings[lane] = booking;
+      });
+      return { date, dateValue, inMonth: isSameMonth(date, month), dayNumber: date.getDate(), label: format(date, "MMMM d"), bookingsOnDay, displayBookings, dateSelectable, price };
+    });
+  }, [days, month, property, activeBookings, calendarBookings, laneById]);
+  const selected = useMemo(() => new Set(selectedDates), [selectedDates]);
+
+  return (
+    <div className="calendar-grid">
+      {cells.map(({ date, dateValue, inMonth, dayNumber, label, bookingsOnDay, displayBookings, dateSelectable, price }) => {
+        const fullyBooked = !dateSelectable;
+        const isSelected = selected.has(dateValue);
+        return (
+          <div key={dateValue} className={`day-cell ${!inMonth ? "outside" : ""} ${bookingsOnDay.length ? "occupied" : ""} ${fullyBooked ? "fully-booked" : ""} ${isSelected ? "selected-day" : ""}`}>
+            <button className="day-select-target" onClick={() => onDateTap(date)} disabled={!dateSelectable} aria-label={fullyBooked ? `${label} cannot form a bookable stay` : `${isSelected ? "Remove" : "Select"} ${label}`}>
+              <span className="day-number">{dayNumber}</span>
+              {!bookingsOnDay.length && inMonth ? <span className="day-price">{price}</span> : null}
+            </button>
+            {bookingsOnDay.length ? <span className="booking-chips">{displayBookings.map((booking, slot) => booking ? <button type="button" key={`${booking.id}-${slot}`} className={`booking-chip ${booking.status}${dateValue === booking.checkOut ? " checkout-day" : ""}`} style={{ "--booking-color": booking.bookingColor || property.highlightColor } as CSSProperties} onClick={() => onOpenBooking(booking)} aria-label={`Open ${booking.roomLabel} booking for ${booking.guestName}${dateValue === booking.checkOut ? ", checkout day" : ""}`}><strong>{booking.roomLabel}</strong><small>{booking.guestName}</small></button> : <span className="booking-chip-placeholder" key={`empty-${slot}`} />)}</span> : null}
+          </div>
+        );
+      })}
+    </div>
+  );
+});
 
 export default function BookingCalendar({ displayName, email, signOutPath }: { displayName: string; email: string; signOutPath: string }) {
   const [activeTab, setActiveTab] = useState<"today" | "calendar" | "properties" | "more">("properties");
@@ -109,7 +181,6 @@ export default function BookingCalendar({ displayName, email, signOutPath }: { d
   const [earningsRange, setEarningsRange] = useState<1 | 3 | 6 | 12>(1);
   const [properties, setProperties] = useState<Property[]>([]);
   const [selectedPropertyId, setSelectedPropertyId] = useState<number | null>(null);
-  const [bookings, setBookings] = useState<Booking[]>([]);
   const [allBookings, setAllBookings] = useState<Booking[]>([]);
   const [month, setMonth] = useState(startOfMonth(new Date()));
   const [loading, setLoading] = useState(true);
@@ -186,17 +257,6 @@ export default function BookingCalendar({ displayName, email, signOutPath }: { d
     }
   }, []);
 
-  const loadBookings = useCallback(async () => {
-    if (!selectedPropertyId) {
-      setBookings([]);
-      return;
-    }
-    const response = await fetch(`/api/bookings?propertyId=${selectedPropertyId}`);
-    const data = await response.json();
-    if (response.ok) setBookings(data.bookings);
-    else toast.error(data.error ?? "Could not load bookings");
-  }, [selectedPropertyId]);
-
   const loadAllBookings = useCallback(async () => {
     const response = await fetch("/api/bookings");
     const data = await response.json();
@@ -205,8 +265,9 @@ export default function BookingCalendar({ displayName, email, signOutPath }: { d
   }, []);
 
   useEffect(() => { void loadProperties(); }, [loadProperties]);
-  useEffect(() => { void loadBookings(); }, [loadBookings]);
   useEffect(() => { void loadAllBookings(); }, [loadAllBookings]);
+  // The calendar renders instantly from bookings already in memory; refresh in the background to pick up changes from other devices.
+  useEffect(() => { if (selectedPropertyId) void loadAllBookings(); }, [selectedPropertyId, loadAllBookings]);
   useEffect(() => { if (activeTab === "more") void loadBackupList(); }, [activeTab]);
   useEffect(() => { setHideCheckedOut(window.localStorage.getItem("roomie-hide-checked-out") === "true"); }, []);
   useEffect(() => { propertyOrderRef.current = properties; }, [properties]);
@@ -216,8 +277,14 @@ export default function BookingCalendar({ displayName, email, signOutPath }: { d
     return Array.from({ length: 42 }, (_, index) => addDays(first, index));
   }, [month]);
 
-  const activeBookings = bookings.filter((booking) => booking.status !== "cancelled");
-  const calendarBookings = activeBookings.filter((booking) => !hideCheckedOut || booking.status !== "checked_out");
+  const activeBookings = useMemo(
+    () => allBookings.filter((booking) => booking.propertyId === selectedPropertyId && booking.status !== "cancelled"),
+    [allBookings, selectedPropertyId],
+  );
+  const calendarBookings = useMemo(
+    () => activeBookings.filter((booking) => !hideCheckedOut || booking.status !== "checked_out"),
+    [activeBookings, hideCheckedOut],
+  );
   const bookingLaneById = useMemo(() => {
     const assignments = new Map<number, number>();
     const assignedBookings: Booking[] = [];
@@ -247,12 +314,7 @@ export default function BookingCalendar({ displayName, email, signOutPath }: { d
       });
 
     return assignments;
-  }, [calendarBookings, selectedProperty]);
-
-  function bookingsForDate(date: Date) {
-    const dateValue = iso(date);
-    return calendarBookings.filter((booking) => booking.checkIn <= dateValue && booking.checkOut >= dateValue);
-  }
+  }, [calendarBookings]);
 
   function openNewBooking(startDate: Date, endDate: Date) {
     const start = iso(startDate);
@@ -332,13 +394,13 @@ export default function BookingCalendar({ displayName, email, signOutPath }: { d
     setPropertyDialog(true);
   }
 
-  function handleDateTap(date: Date) {
+  const handleDateTap = useCallback((date: Date) => {
     const value = iso(date);
     setSelectionMode(true);
     setSelectedDates((current) => current.includes(value)
       ? current.filter((item) => item !== value)
       : [...current, value].sort());
-  }
+  }, []);
 
   function continueWithSelectedDates() {
     if (selectedDates.length < 1) {
@@ -440,7 +502,6 @@ export default function BookingCalendar({ displayName, email, signOutPath }: { d
     const data = await response.json();
     setSaving(false);
     if (!response.ok) return toast.error(data.error ?? "Could not save booking");
-    setBookings((current) => (editingBookingId ? current.map((item) => item.id === data.booking.id ? data.booking : item) : [...current, data.booking]).sort((a, b) => a.checkIn.localeCompare(b.checkIn)));
     setAllBookings((current) => (editingBookingId ? current.map((item) => item.id === data.booking.id ? data.booking : item) : [...current, data.booking]).sort((a, b) => a.checkIn.localeCompare(b.checkIn)));
     setBookingDialog(false);
     setEditingBookingId(null);
@@ -458,7 +519,6 @@ export default function BookingCalendar({ displayName, email, signOutPath }: { d
     setSaving(false);
     if (!response.ok) return toast.error(data.error ?? "Could not delete property");
     setProperties((current) => current.filter((property) => property.id !== propertyId));
-    setBookings((current) => current.filter((booking) => booking.propertyId !== propertyId));
     setAllBookings((current) => current.filter((booking) => booking.propertyId !== propertyId));
     if (selectedPropertyId === propertyId) setSelectedPropertyId(null);
     setEditingPropertyId(null);
@@ -478,7 +538,6 @@ export default function BookingCalendar({ displayName, email, signOutPath }: { d
     const data = await response.json();
     setSaving(false);
     if (!response.ok) return toast.error(data.error ?? "Could not delete booking");
-    setBookings((current) => current.filter((booking) => booking.id !== bookingId));
     setAllBookings((current) => current.filter((booking) => booking.id !== bookingId));
     setDeleteBookingDialog(false);
     setSelectedBooking(null);
@@ -495,7 +554,6 @@ export default function BookingCalendar({ displayName, email, signOutPath }: { d
     });
     const data = await response.json();
     if (!response.ok) return toast.error(data.error ?? "Could not update booking");
-    setBookings((current) => current.map((item) => item.id === data.booking.id ? data.booking : item));
     setAllBookings((current) => current.map((item) => item.id === data.booking.id ? data.booking : item));
     setSelectedBooking(data.booking);
     toast.success(status === "cancelled" ? "Booking cancelled" : status === "checked_out" ? "Check-out confirmed" : "Booking updated", { action: { label: "Undo", onClick: () => void restoreBookingStatus(data.booking.id, previousStatus) } });
@@ -509,7 +567,6 @@ export default function BookingCalendar({ displayName, email, signOutPath }: { d
     });
     const data = await response.json();
     if (!response.ok) return toast.error(data.error ?? "Could not undo cancellation");
-    setBookings((current) => current.map((item) => item.id === data.booking.id ? data.booking : item));
     setAllBookings((current) => current.map((item) => item.id === data.booking.id ? data.booking : item));
     setSelectedBooking((current) => current?.id === data.booking.id ? data.booking : current);
     toast.success("Cancellation undone");
@@ -526,7 +583,6 @@ export default function BookingCalendar({ displayName, email, signOutPath }: { d
     });
     const data = await response.json();
     if (!response.ok) return toast.error(data.error ?? "Could not update cleaning status");
-    setBookings((current) => current.map((item) => item.id === data.booking.id ? data.booking : item));
     setAllBookings((current) => current.map((item) => item.id === data.booking.id ? data.booking : item));
     setSelectedBooking(data.booking);
     toast.success(nextStatus === "clean" ? "Marked clean" : "Marked not clean", { action: { label: "Undo", onClick: () => void restoreCleaningStatus(bookingId, previousStatus) } });
@@ -540,7 +596,6 @@ export default function BookingCalendar({ displayName, email, signOutPath }: { d
     });
     const data = await response.json();
     if (!response.ok) return toast.error(data.error ?? "Could not undo cleaning change");
-    setBookings((current) => current.map((item) => item.id === data.booking.id ? data.booking : item));
     setAllBookings((current) => current.map((item) => item.id === data.booking.id ? data.booking : item));
     setSelectedBooking((current) => current?.id === data.booking.id ? data.booking : current);
     toast.success("Cleaning change undone");
@@ -662,50 +717,80 @@ export default function BookingCalendar({ displayName, email, signOutPath }: { d
   const total = nights * Number(nightlyPrice || 0) + feesTotal;
   const effectiveAmountPaid = paymentMode === "full" ? total : paymentMode === "unpaid" ? 0 : Number(amountPaid || 0);
   const balance = Math.max(0, total - effectiveAmountPaid);
-  const formBookings = formProperty ? allBookings.filter((booking) => booking.propertyId === formProperty.id) : [];
-  const unavailableRoomOptions = unavailableRoomsForRange(formProperty, formBookings, checkIn, checkOut, editingBookingId);
-  const directlyBookedRoomOptions = new Set(formBookings
-    .filter((booking) => booking.id !== editingBookingId && booking.status !== "cancelled" && booking.checkIn < checkOut && booking.checkOut > checkIn)
-    .map((booking) => canonicalRoom(booking.roomLabel)));
+  const { unavailableRoomOptions, directlyBookedRoomOptions } = useMemo(() => {
+    const formBookings = formProperty ? allBookings.filter((booking) => booking.propertyId === formProperty.id) : [];
+    return {
+      unavailableRoomOptions: unavailableRoomsForRange(formProperty, formBookings, checkIn, checkOut, editingBookingId),
+      directlyBookedRoomOptions: new Set(formBookings
+        .filter((booking) => booking.id !== editingBookingId && booking.status !== "cancelled" && booking.checkIn < checkOut && booking.checkOut > checkIn)
+        .map((booking) => canonicalRoom(booking.roomLabel))),
+    };
+  }, [formProperty, allBookings, checkIn, checkOut, editingBookingId]);
   const pageTitle = activeTab === "today" ? "Today" : activeTab === "properties" ? "Listings" : activeTab === "more" ? morePage === "earnings" ? "Earnings" : morePage === "backup" ? "Backup" : "More" : selectedProperty?.name ?? "Calendar";
   const today = iso(new Date());
-  const todayCheckIns = allBookings.filter((booking) => !["cancelled", "checked_out"].includes(booking.status) && booking.checkIn === today);
-  const todayCheckOuts = allBookings.filter((booking) => !["cancelled", "checked_out"].includes(booking.status) && booking.checkOut === today);
-  const todayStays = allBookings.filter((booking) => !["cancelled", "checked_out"].includes(booking.status) && booking.checkIn < today && booking.checkOut > today);
-  const upcomingBookings = allBookings
-    .filter((booking) => !["cancelled", "checked_out", "blocked"].includes(booking.status) && booking.checkIn > today)
-    .sort((a, b) => a.checkIn.localeCompare(b.checkIn) || a.id - b.id);
+  const propertyById = useMemo(() => new Map(properties.map((property) => [property.id, property])), [properties]);
+  const { todayCheckIns, todayCheckOuts, todayStays, upcomingBookings } = useMemo(() => {
+    const current = allBookings.filter((booking) => booking.status !== "cancelled" && booking.status !== "checked_out");
+    return {
+      todayCheckIns: current.filter((booking) => booking.checkIn === today),
+      todayCheckOuts: current.filter((booking) => booking.checkOut === today),
+      todayStays: current.filter((booking) => booking.checkIn < today && booking.checkOut > today),
+      upcomingBookings: current
+        .filter((booking) => booking.status !== "blocked" && booking.checkIn > today)
+        .sort((a, b) => a.checkIn.localeCompare(b.checkIn) || a.id - b.id),
+    };
+  }, [allBookings, today]);
   const normalizedListingSearch = listingSearch.trim().toLocaleLowerCase();
-  const filteredProperties = normalizedListingSearch
+  const filteredProperties = useMemo(() => normalizedListingSearch
     ? properties.filter((property) => [property.name, property.address, ...roomsFor(property)]
       .some((value) => value.toLocaleLowerCase().includes(normalizedListingSearch)))
-    : properties;
-  const normalizedSearch = searchQuery.trim().toLocaleLowerCase();
-  const searchResults = normalizedSearch ? allBookings.filter((booking) => {
-    const property = properties.find((item) => item.id === booking.propertyId);
+    : properties, [properties, normalizedListingSearch]);
+  // Deferred so the search field stays responsive while results for the previous keystroke render.
+  const normalizedSearch = useDeferredValue(searchQuery.trim().toLocaleLowerCase());
+  const searchResults = useMemo(() => normalizedSearch ? allBookings.filter((booking) => {
+    const property = propertyById.get(booking.propertyId);
     return [booking.guestName, booking.guestPhone, booking.guestEmail, booking.roomLabel, booking.checkIn, booking.checkOut, property?.name, property?.address]
       .some((value) => String(value ?? "").toLocaleLowerCase().includes(normalizedSearch));
-  }) : [];
-  const outstandingBookings = allBookings.filter((booking) => booking.status !== "cancelled" && booking.amountPaidCents < booking.totalPriceCents);
-  const paymentResults = outstandingBookings.filter((booking) => paymentFilter === "all" || paymentState(booking).toLocaleLowerCase() === paymentFilter);
-  const outstandingTotal = outstandingBookings.reduce((sum, booking) => sum + Math.max(0, booking.totalPriceCents - booking.amountPaidCents), 0);
-  const earningsMonths = Array.from({ length: earningsRange }, (_, index) => subMonths(startOfMonth(new Date()), earningsRange - index - 1));
-  const earningsMonthKeys = new Set(earningsMonths.map((date) => format(date, "yyyy-MM")));
-  const earningsBookings = allBookings.filter((booking) => !["cancelled", "blocked"].includes(booking.status)
-    && earningsMonthKeys.has(booking.checkIn.slice(0, 7))
-    && (earningsProperty === "all" || booking.propertyId === Number(earningsProperty)));
-  const earningsBookedTotal = earningsBookings.reduce((sum, booking) => sum + booking.totalPriceCents, 0);
-  const earningsCollectedTotal = earningsBookings.reduce((sum, booking) => sum + booking.amountPaidCents, 0);
-  const earningsCashTotal = earningsBookings.filter((booking) => booking.paymentMethod === "cash").reduce((sum, booking) => sum + booking.amountPaidCents, 0);
-  const earningsCardTotal = earningsBookings.filter((booking) => booking.paymentMethod === "credit_card").reduce((sum, booking) => sum + booking.amountPaidCents, 0);
-  const earningsUnspecifiedTotal = Math.max(0, earningsCollectedTotal - earningsCashTotal - earningsCardTotal);
-  const earningsOutstandingTotal = Math.max(0, earningsBookedTotal - earningsCollectedTotal);
-  const earningsByMonth = earningsMonths.map((date) => {
-    const key = format(date, "yyyy-MM");
-    const rows = earningsBookings.filter((booking) => booking.checkIn.startsWith(key));
-    return { key, label: format(date, earningsRange > 6 ? "MMM yy" : "MMM"), total: rows.reduce((sum, booking) => sum + booking.amountPaidCents, 0) };
-  });
-  const earningsChartMax = Math.max(1, ...earningsByMonth.map((item) => item.total));
+  }) : [], [allBookings, propertyById, normalizedSearch]);
+  // Built once per result set; a broad query can match hundreds of rows, each formatting two dates.
+  const searchResultItems = useMemo(() => searchResults.map((booking) => <button key={booking.id} className="booking-list-item" onClick={() => { setSearchDialog(false); setSelectedBooking(booking); }}><span className="booking-list-date"><strong>{format(parseISO(booking.checkIn), "MMM d")}</strong><small>{format(parseISO(booking.checkOut), "MMM d")}</small></span><span className="booking-list-copy"><strong>{booking.guestName}</strong><small>{propertyById.get(booking.propertyId)?.name} · {booking.roomLabel}</small></span><ChevronRight /></button>), [searchResults, propertyById]);
+  const { outstandingBookings, outstandingTotal } = useMemo(() => {
+    const outstanding = allBookings.filter((booking) => booking.status !== "cancelled" && booking.amountPaidCents < booking.totalPriceCents);
+    return { outstandingBookings: outstanding, outstandingTotal: outstanding.reduce((sum, booking) => sum + Math.max(0, booking.totalPriceCents - booking.amountPaidCents), 0) };
+  }, [allBookings]);
+  const paymentResults = useMemo(
+    () => outstandingBookings.filter((booking) => paymentFilter === "all" || paymentState(booking).toLocaleLowerCase() === paymentFilter),
+    [outstandingBookings, paymentFilter],
+  );
+  const thisMonth = today.slice(0, 7);
+  const { earningsBookings, earningsBookedTotal, earningsCollectedTotal, earningsCashTotal, earningsCardTotal, earningsUnspecifiedTotal, earningsOutstandingTotal, earningsByMonth, earningsChartMax } = useMemo(() => {
+    const earningsMonths = Array.from({ length: earningsRange }, (_, index) => subMonths(parseISO(`${thisMonth}-01`), earningsRange - index - 1));
+    const earningsMonthKeys = new Set(earningsMonths.map((date) => format(date, "yyyy-MM")));
+    const earningsBookings = allBookings.filter((booking) => booking.status !== "cancelled" && booking.status !== "blocked"
+      && earningsMonthKeys.has(booking.checkIn.slice(0, 7))
+      && (earningsProperty === "all" || booking.propertyId === Number(earningsProperty)));
+    const earningsBookedTotal = earningsBookings.reduce((sum, booking) => sum + booking.totalPriceCents, 0);
+    const earningsCollectedTotal = earningsBookings.reduce((sum, booking) => sum + booking.amountPaidCents, 0);
+    const earningsCashTotal = earningsBookings.filter((booking) => booking.paymentMethod === "cash").reduce((sum, booking) => sum + booking.amountPaidCents, 0);
+    const earningsCardTotal = earningsBookings.filter((booking) => booking.paymentMethod === "credit_card").reduce((sum, booking) => sum + booking.amountPaidCents, 0);
+    const earningsByMonth = earningsMonths.map((date) => {
+      const key = format(date, "yyyy-MM");
+      const rows = earningsBookings.filter((booking) => booking.checkIn.startsWith(key));
+      return { key, label: format(date, earningsRange > 6 ? "MMM yy" : "MMM"), total: rows.reduce((sum, booking) => sum + booking.amountPaidCents, 0) };
+    });
+    return {
+      earningsBookings,
+      earningsBookedTotal,
+      earningsCollectedTotal,
+      earningsCashTotal,
+      earningsCardTotal,
+      earningsUnspecifiedTotal: Math.max(0, earningsCollectedTotal - earningsCashTotal - earningsCardTotal),
+      earningsOutstandingTotal: Math.max(0, earningsBookedTotal - earningsCollectedTotal),
+      earningsByMonth,
+      earningsChartMax: Math.max(1, ...earningsByMonth.map((item) => item.total)),
+    };
+  }, [allBookings, earningsRange, earningsProperty, thisMonth]);
+  const selectedBookingFees = useMemo(() => selectedBooking ? feesFor(selectedBooking) : [], [selectedBooking]);
 
   function openCalendarTab() {
     setSelectedPropertyId(null);
@@ -715,13 +800,7 @@ export default function BookingCalendar({ displayName, email, signOutPath }: { d
   }
 
   function propertyForBooking(booking: Booking) {
-    return properties.find((property) => property.id === booking.propertyId);
-  }
-
-  function paymentState(booking: Booking) {
-    if (booking.amountPaidCents >= booking.totalPriceCents) return "Paid";
-    if (booking.amountPaidCents > 0) return "Partial";
-    return "Unpaid";
+    return propertyById.get(booking.propertyId);
   }
 
   function bookingListButton(booking: Booking, timeType?: "checkIn" | "checkOut") {
@@ -857,32 +936,7 @@ export default function BookingCalendar({ displayName, email, signOutPath }: { d
           <Button variant="ghost" size="icon" onClick={() => setMonth(addMonths(month, 1))} aria-label="Next month"><ChevronRight /></Button>
         </div>
         <div className="weekday-row">{weekdayNames.map((day) => <div key={day}>{day}</div>)}</div>
-        <div className="calendar-grid">
-          {calendarDays.map((date) => {
-            const bookingsOnDay = bookingsForDate(date);
-            const dateValue = iso(date);
-            const nextDateValue = iso(addDays(date, 1));
-            const roomCount = roomsFor(selectedProperty).length;
-            const canStartNight = unavailableRoomsForRange(selectedProperty, activeBookings, dateValue, nextDateValue).size < roomCount;
-            const dateSelectable = Boolean(selectedPropertyId) && canStartNight;
-            const fullyBooked = !dateSelectable;
-            const displayBookings: Array<Booking | null> = [null, null, null, null];
-            bookingsOnDay.forEach((booking) => {
-              const lane = bookingLaneById.get(booking.id);
-              if (lane !== undefined) displayBookings[lane] = booking;
-            });
-            const isSelected = selectedDates.includes(dateValue);
-            return (
-              <div key={dateValue} className={`day-cell ${!isSameMonth(date, month) ? "outside" : ""} ${bookingsOnDay.length ? "occupied" : ""} ${fullyBooked ? "fully-booked" : ""} ${isSelected ? "selected-day" : ""}`}>
-                <button className="day-select-target" onClick={() => handleDateTap(date)} disabled={!dateSelectable} aria-label={fullyBooked ? `${format(date, "MMMM d")} cannot form a bookable stay` : `${isSelected ? "Remove" : "Select"} ${format(date, "MMMM d")}`}>
-                  <span className="day-number">{format(date, "d")}</span>
-                  {!bookingsOnDay.length && selectedProperty && isSameMonth(date, month) ? <span className="day-price">{money(selectedProperty.nightlyRateCents)}</span> : null}
-                </button>
-                {bookingsOnDay.length ? <span className="booking-chips">{displayBookings.map((booking, slot) => booking ? <button type="button" key={`${booking.id}-${slot}`} className={`booking-chip ${booking.status}${dateValue === booking.checkOut ? " checkout-day" : ""}`} style={{ "--booking-color": booking.bookingColor || selectedProperty.highlightColor } as CSSProperties} onClick={() => setSelectedBooking(booking)} aria-label={`Open ${booking.roomLabel} booking for ${booking.guestName}${dateValue === booking.checkOut ? ", checkout day" : ""}`}><strong>{booking.roomLabel}</strong><small>{booking.guestName}</small></button> : <span className="booking-chip-placeholder" key={`empty-${slot}`} />)}</span> : null}
-              </div>
-            );
-          })}
-        </div>
+        <CalendarGrid days={calendarDays} month={month} property={selectedProperty} activeBookings={activeBookings} calendarBookings={calendarBookings} laneById={bookingLaneById} selectedDates={selectedDates} onDateTap={handleDateTap} onOpenBooking={setSelectedBooking} />
         </section>
 
         {selectedDates.length > 0 ? (
@@ -952,12 +1006,11 @@ export default function BookingCalendar({ displayName, email, signOutPath }: { d
             <span><strong>{displayName}</strong><small>{email}</small></span>
           </div>
           <div className="account-details">
-            <div><span className="account-detail-icon"><UserRound /></span><span><small>Role</small><strong>Owner</strong></span></div>
-            <div><span className="account-detail-icon"><LockKeyhole /></span><span><small>App access</small><strong>Private</strong></span></div>
-            <div><span className="account-detail-icon"><ShieldCheck /></span><span><small>Who can open it</small><strong>Only invited people</strong></span></div>
+            <div><span className="account-detail-icon"><LockKeyhole /></span><span><small>Your listings and bookings</small><strong>Private to this account</strong></span></div>
+            <div><span className="account-detail-icon"><ShieldCheck /></span><span><small>Who can see them</small><strong>Only you</strong></span></div>
             <div><span className="account-detail-icon"><Mail /></span><span><small>Signed in with</small><strong>{email}</strong></span></div>
           </div>
-          <p className="account-note">Your boss is not connected yet. You can invite her when the app is ready.</p>
+          <p className="account-note">Every account has its own separate listings, bookings and backups. Nobody else can see yours.</p>
           <Button asChild variant="outline" className="account-signout"><a href={signOutPath}><LogOut /> Sign out</a></Button>
         </DialogContent>
       </Dialog>
@@ -1020,7 +1073,7 @@ export default function BookingCalendar({ displayName, email, signOutPath }: { d
                 <div className="money-input"><span>$</span><Input aria-label="Fee amount" type="number" min="0" step="0.01" value={fee.amount} onChange={(event) => setBookingFees((current) => current.map((item) => item.id === fee.id ? { ...item, amount: event.target.value } : item))} placeholder="0" /></div>
                 <button type="button" className="remove-fee" onClick={() => setBookingFees((current) => current.filter((item) => item.id !== fee.id))} aria-label="Remove fee"><Trash2 /></button>
               </div>)}
-              {bookingFees.length > 0 && <div className="fees-subtotal"><span>Fees total</span><strong>{new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(feesTotal)}</strong></div>}
+              {bookingFees.length > 0 && <div className="fees-subtotal"><span>Fees total</span><strong>{preciseMoney(feesTotal)}</strong></div>}
             </div>
             <div><Label>Payment</Label><div className="payment-mode" role="group" aria-label="Payment status">
               <button type="button" className={paymentMode === "full" ? "active" : ""} onClick={() => setPaymentMode("full")}>Paid in full</button>
@@ -1036,7 +1089,7 @@ export default function BookingCalendar({ displayName, email, signOutPath }: { d
             <div><Label>Status</Label><Select value={bookingStatus} onValueChange={(value) => setBookingStatus(value as typeof bookingStatus)}><SelectTrigger className="w-full"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="confirmed">Confirmed</SelectItem><SelectItem value="pending">Pending</SelectItem><SelectItem value="blocked">Blocked</SelectItem></SelectContent></Select></div>
             <div><Label>Cleaning</Label><Select value={cleaningStatus} onValueChange={(value) => setCleaningStatus(value as "clean" | "not_clean")}><SelectTrigger className="w-full"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="not_clean">Not clean</SelectItem><SelectItem value="clean">Clean</SelectItem></SelectContent></Select></div>
             <div><Label htmlFor="notes">Notes</Label><Textarea id="notes" value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Optional" /></div>
-            <div className="payment-summary"><span><small>Total</small><strong>{new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(total)}</strong></span><span><small>Paid</small><strong>{new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(effectiveAmountPaid)}</strong></span><span><small>Balance</small><strong>{new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(balance)}</strong></span></div>
+            <div className="payment-summary"><span><small>Total</small><strong>{preciseMoney(total)}</strong></span><span><small>Paid</small><strong>{preciseMoney(effectiveAmountPaid)}</strong></span><span><small>Balance</small><strong>{preciseMoney(balance)}</strong></span></div>
             <Button type="submit" size="lg" disabled={saving || nights < 1 || !roomLabel}>{saving ? "Saving…" : editingBookingId ? "Save changes" : "Create booking"}</Button>
           </form>
         </DialogContent>
@@ -1051,8 +1104,8 @@ export default function BookingCalendar({ displayName, email, signOutPath }: { d
               <DropdownMenuContent align="end"><DropdownMenuItem variant="destructive" onSelect={() => setDeleteBookingDialog(true)}><Trash2 /> Delete permanently</DropdownMenuItem></DropdownMenuContent>
             </DropdownMenu>
             <DialogHeader><span className={`status-pill ${selectedBooking.status}`}>{selectedBooking.status === "checked_out" ? "checked out" : selectedBooking.status}</span><DialogTitle>{selectedBooking.guestName}</DialogTitle><DialogDescription>{selectedBooking.roomLabel} · {format(parseISO(selectedBooking.checkIn), "MMM d")} – {format(parseISO(selectedBooking.checkOut), "MMM d, yyyy")}</DialogDescription></DialogHeader>
-            <div className="detail-total"><span>{differenceInCalendarDays(parseISO(selectedBooking.checkOut), parseISO(selectedBooking.checkIn))} nights at {money(selectedBooking.nightlyPriceCents)}{feesFor(selectedBooking).length ? ` + ${feesFor(selectedBooking).length} fee${feesFor(selectedBooking).length === 1 ? "" : "s"}` : ""}</span><strong>{money(selectedBooking.totalPriceCents)}</strong></div>
-            {feesFor(selectedBooking).length > 0 && <div className="detail-fees">{feesFor(selectedBooking).map((fee, index) => <span key={`${fee.name}-${index}`}><small>{fee.name}</small><strong>{money(fee.amountCents)}</strong></span>)}</div>}
+            <div className="detail-total"><span>{differenceInCalendarDays(parseISO(selectedBooking.checkOut), parseISO(selectedBooking.checkIn))} nights at {money(selectedBooking.nightlyPriceCents)}{selectedBookingFees.length ? ` + ${selectedBookingFees.length} fee${selectedBookingFees.length === 1 ? "" : "s"}` : ""}</span><strong>{money(selectedBooking.totalPriceCents)}</strong></div>
+            {selectedBookingFees.length > 0 && <div className="detail-fees">{selectedBookingFees.map((fee, index) => <span key={`${fee.name}-${index}`}><small>{fee.name}</small><strong>{money(fee.amountCents)}</strong></span>)}</div>}
             <div className="guest-detail-grid"><span><small>Check-in</small><strong>{displayTime(selectedBooking.checkInTime)}</strong></span><span><small>Check-out</small><strong>{displayTime(selectedBooking.checkOutTime)}</strong></span></div>
             <div className="guest-detail-grid"><span><small>Guests</small><strong>{selectedBooking.guestCount}</strong></span><span><small>Phone</small><strong>{selectedBooking.guestPhone || "Not added"}</strong></span><span><small>Email</small><strong>{selectedBooking.guestEmail || "Not added"}</strong></span></div>
             <div className="payment-detail"><span><small>Payment</small><strong>{paymentState(selectedBooking)}</strong></span><span><small>Method</small><strong>{selectedBooking.paymentMethod === "credit_card" ? "Credit card" : selectedBooking.paymentMethod === "cash" ? "Cash" : "Not set"}</strong></span><span><small>Paid</small><strong>{money(selectedBooking.amountPaidCents)}</strong></span><span><small>Balance</small><strong>{money(Math.max(0, selectedBooking.totalPriceCents - selectedBooking.amountPaidCents))}</strong></span></div>
@@ -1093,7 +1146,7 @@ export default function BookingCalendar({ displayName, email, signOutPath }: { d
         <DialogContent className="mobile-dialog search-dialog">
           <DialogHeader><DialogTitle>Search bookings</DialogTitle><DialogDescription>Search guest  listing  room  phone  email or date.</DialogDescription></DialogHeader>
           <div className="search-field"><Search /><Input value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} placeholder="Search bookings" autoFocus /></div>
-          {normalizedSearch ? searchResults.length ? <div className="booking-list search-results">{searchResults.map((booking) => <button key={booking.id} className="booking-list-item" onClick={() => { setSearchDialog(false); setSelectedBooking(booking); }}><span className="booking-list-date"><strong>{format(parseISO(booking.checkIn), "MMM d")}</strong><small>{format(parseISO(booking.checkOut), "MMM d")}</small></span><span className="booking-list-copy"><strong>{booking.guestName}</strong><small>{propertyForBooking(booking)?.name} · {booking.roomLabel}</small></span><ChevronRight /></button>)}</div> : <p className="search-empty">No matching bookings</p> : <p className="search-empty">Start typing to search every booking</p>}
+          {normalizedSearch ? searchResults.length ? <div className="booking-list search-results">{searchResultItems}</div> : <p className="search-empty">No matching bookings</p> : <p className="search-empty">Start typing to search every booking</p>}
         </DialogContent>
       </Dialog>
 

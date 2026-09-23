@@ -1,8 +1,8 @@
 import { and, eq, gt, lt, ne } from "drizzle-orm";
 import { getDb } from "../../../../db";
 import { createAutomaticBackup } from "../../../../db/backups";
-import { bookings } from "../../../../db/schema";
-import { getChatGPTUser } from "../../../chatgpt-auth";
+import { bookings, properties } from "../../../../db/schema";
+import { requireAccount } from "../../../chatgpt-auth";
 
 function validDate(value: unknown): value is string {
   return typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value);
@@ -29,7 +29,8 @@ function parseFees(value: unknown) {
 }
 
 export async function PATCH(request: Request, context: { params: Promise<{ id: string }> }) {
-  if (!(await getChatGPTUser())) return Response.json({ error: "Sign in required" }, { status: 401 });
+  const owner = await requireAccount();
+  if (owner instanceof Response) return owner;
   const { id } = await context.params;
   const bookingId = Number(id);
   const body = (await request.json()) as Record<string, unknown>;
@@ -39,13 +40,15 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
     if ("cleaningStatus" in body) {
       const cleaningStatus = String(body.cleaningStatus);
       if (!["clean", "not_clean"].includes(cleaningStatus)) return Response.json({ error: "Invalid cleaning status" }, { status: 400 });
-      await createAutomaticBackup("Before changing cleaning status");
-      const [booking] = await getDb().update(bookings).set({ cleaningStatus: cleaningStatus as "clean" | "not_clean" }).where(eq(bookings.id, bookingId)).returning();
+      await createAutomaticBackup(owner, "Before changing cleaning status");
+      const [booking] = await getDb().update(bookings).set({ cleaningStatus: cleaningStatus as "clean" | "not_clean" }).where(and(eq(bookings.id, bookingId), eq(bookings.ownerEmail, owner))).returning();
+      if (!booking) return Response.json({ error: "Booking not found" }, { status: 404 });
       return Response.json({ booking });
     }
     if (!["confirmed", "pending", "blocked", "cancelled", "checked_out"].includes(status)) return Response.json({ error: "Invalid update" }, { status: 400 });
-    await createAutomaticBackup(status === "cancelled" ? "Before cancelling a booking" : status === "checked_out" ? "Before confirming check-out" : "Before changing booking status");
-    const [booking] = await getDb().update(bookings).set({ status: status as "confirmed" | "pending" | "blocked" | "cancelled" | "checked_out" }).where(eq(bookings.id, bookingId)).returning();
+    await createAutomaticBackup(owner, status === "cancelled" ? "Before cancelling a booking" : status === "checked_out" ? "Before confirming check-out" : "Before changing booking status");
+    const [booking] = await getDb().update(bookings).set({ status: status as "confirmed" | "pending" | "blocked" | "cancelled" | "checked_out" }).where(and(eq(bookings.id, bookingId), eq(bookings.ownerEmail, owner))).returning();
+    if (!booking) return Response.json({ error: "Booking not found" }, { status: 404 });
     return Response.json({ booking });
   }
   const propertyId = Number(body.propertyId);
@@ -70,8 +73,10 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
   if (!Number.isFinite(nightlyPrice) || nightlyPrice < 0 || !Number.isFinite(amountPaid) || amountPaid < 0) return Response.json({ error: "Enter valid payment amounts" }, { status: 400 });
   if (!["confirmed", "pending", "blocked", "cancelled", "checked_out"].includes(status)) return Response.json({ error: "Choose a valid status" }, { status: 400 });
   const db = getDb();
+  const [ownedProperty] = await db.select({ id: properties.id }).from(properties).where(and(eq(properties.id, propertyId), eq(properties.ownerEmail, owner))).limit(1);
+  if (!ownedProperty) return Response.json({ error: "Listing not found" }, { status: 404 });
   const overlap = await db.select({ roomLabel: bookings.roomLabel }).from(bookings).where(and(
-    eq(bookings.propertyId, propertyId), ne(bookings.id, bookingId), ne(bookings.status, "cancelled"), lt(bookings.checkIn, checkOut), gt(bookings.checkOut, checkIn)
+    eq(bookings.ownerEmail, owner), eq(bookings.propertyId, propertyId), ne(bookings.id, bookingId), ne(bookings.status, "cancelled"), lt(bookings.checkIn, checkOut), gt(bookings.checkOut, checkIn)
   ));
   const normalizedRoom = canonicalRoom(roomLabel);
   if (overlap.some((existing) => normalizedRoom === "full" || canonicalRoom(existing.roomLabel) === "full" || canonicalRoom(existing.roomLabel) === normalizedRoom)) {
@@ -82,20 +87,23 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
   const totalPriceCents = nightlyPriceCents * nights + fees.reduce((sum, fee) => sum + fee.amountCents, 0);
   const amountPaidCents = Math.round(amountPaid * 100);
   if (amountPaidCents > totalPriceCents) return Response.json({ error: "Amount paid cannot exceed the total" }, { status: 400 });
-  await createAutomaticBackup("Before editing a booking");
+  await createAutomaticBackup(owner, "Before editing a booking");
   const [booking] = await db.update(bookings).set({
     propertyId, guestName, guestPhone, guestEmail, guestCount, checkIn, checkOut, checkInTime, checkOutTime, nightlyPriceCents, totalPriceCents,
     amountPaidCents, paymentMethod, roomLabel, bookingColor, cleaningStatus, fees: JSON.stringify(fees), status: status as "confirmed" | "pending" | "blocked" | "cancelled" | "checked_out", notes: String(body.notes ?? "").trim(),
-  }).where(eq(bookings.id, bookingId)).returning();
+  }).where(and(eq(bookings.id, bookingId), eq(bookings.ownerEmail, owner))).returning();
+  if (!booking) return Response.json({ error: "Booking not found" }, { status: 404 });
   return Response.json({ booking });
 }
 
 export async function DELETE(_request: Request, context: { params: Promise<{ id: string }> }) {
-  if (!(await getChatGPTUser())) return Response.json({ error: "Sign in required" }, { status: 401 });
+  const owner = await requireAccount();
+  if (owner instanceof Response) return owner;
   const { id } = await context.params;
   const bookingId = Number(id);
   if (!Number.isInteger(bookingId)) return Response.json({ error: "Invalid booking" }, { status: 400 });
-  await createAutomaticBackup("Before permanently deleting a booking");
-  await getDb().delete(bookings).where(eq(bookings.id, bookingId));
+  await createAutomaticBackup(owner, "Before permanently deleting a booking");
+  const [deleted] = await getDb().delete(bookings).where(and(eq(bookings.id, bookingId), eq(bookings.ownerEmail, owner))).returning({ id: bookings.id });
+  if (!deleted) return Response.json({ error: "Booking not found" }, { status: 404 });
   return Response.json({ ok: true });
 }

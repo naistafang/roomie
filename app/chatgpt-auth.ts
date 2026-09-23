@@ -35,6 +35,16 @@ export async function getChatGPTUser(): Promise<ChatGPTUser | null> {
   };
 }
 
+/**
+ * For API routes: the signed-in account's storage key (lowercased email), or a 401 response.
+ * All data is scoped to this key, so each account only ever sees its own listings and bookings.
+ */
+export async function requireAccount(): Promise<string | Response> {
+  const user = await getChatGPTUser();
+  if (!user) return Response.json({ error: "Sign in required" }, { status: 401 });
+  return user.email.trim().toLowerCase();
+}
+
 export async function requireChatGPTUser(
   returnTo: string,
 ): Promise<ChatGPTUser> {

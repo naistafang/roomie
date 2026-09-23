@@ -1,6 +1,25 @@
-@import "tailwindcss";
+@import "tailwindcss" source(none);
 @import "tw-animate-css";
 @import "../vendor/shadcn-tailwind-4.13.0.css";
+
+/* Only scan files the app actually uses. Automatic detection also picked up ~50 unused
+   components/ui files, roughly doubling the stylesheet and Safari's style-matching work.
+   Add a component here when you start importing it. */
+@source "../app";
+@source "../lib";
+@source "../hooks";
+@source "../components/ui/alert-dialog.tsx";
+@source "../components/ui/button.tsx";
+@source "../components/ui/dialog.tsx";
+@source "../components/ui/dropdown-menu.tsx";
+@source "../components/ui/input.tsx";
+@source "../components/ui/label.tsx";
+@source "../components/ui/select.tsx";
+@source "../components/ui/sonner.tsx";
+@source "../components/ui/switch.tsx";
+@source "../components/ui/textarea.tsx";
+/* Catalog utilities the template's tests expect to always be emitted. */
+@source inline("scrollbar-thin scrollbar-none scrollbar-gutter-stable scroll-fade-b scroll-fade-x shimmer group-data-[state=processing]/attachment:shimmer");
 
 @utility scrollbar-thin {
   scrollbar-width: thin;
@@ -106,7 +125,7 @@ button { touch-action: manipulation; }
 
 .app-shell {
   width: min(100%, 900px);
-  min-height: 100dvh;
+  min-height: 100svh;
   margin: 0 auto;
   padding: max(22px, env(safe-area-inset-top)) 10px calc(154px + env(safe-area-inset-bottom));
 }
@@ -134,6 +153,15 @@ button { touch-action: manipulation; }
 .account-note { margin: -3px 2px 0; color: #6f7b90; font-size: 13px; line-height: 1.45; }
 .account-signout { width: 100%; min-height: 46px; border-radius: 14px; }
 
+.signin-screen { display: grid; min-height: 100svh; place-items: center; padding: max(22px, env(safe-area-inset-top)) 16px max(22px, env(safe-area-inset-bottom)); }
+.signin-card { display: flex; width: min(100%, 400px); flex-direction: column; align-items: center; padding: 34px 24px 26px; border: 1px solid #e0e6f0; border-radius: 27px; background: #fff; box-shadow: 0 11px 30px rgba(26,40,73,.09); text-align: center; }
+.signin-icon { display: grid; width: 62px; height: 62px; margin-bottom: 16px; place-items: center; border-radius: 20px; background: #eaf1ff; color: #246bfd; }
+.signin-icon svg { width: 30px; height: 30px; }
+.signin-card h1 { margin: 0 0 8px; color: #172648; font-size: 25px; line-height: 1.15; letter-spacing: -.03em; }
+.signin-card > p:not(.eyebrow) { margin: 0 0 24px; color: #68758c; font-size: 15px; line-height: 1.45; }
+.signin-button { display: flex; width: 100%; min-height: 52px; align-items: center; justify-content: center; border-radius: 16px; background: #172648; color: #fff; font-size: 16px; font-weight: 750; text-decoration: none; }
+.signin-button:active { transform: scale(.98); }
+
 .properties-screen { width: calc(100% + 12px); margin-inline: -6px; padding-bottom: 12px; }
 .properties-heading { display: flex; gap: 12px; align-items: center; justify-content: space-between; margin-bottom: 14px; }
 .properties-heading h2 { margin: 0; font-size: 20px; letter-spacing: -.02em; }
@@ -148,7 +176,7 @@ button { touch-action: manipulation; }
 .property-add-button svg { width: 25px; height: 25px; }
 .property-grid { display: grid; width: 100%; grid-template-columns: minmax(0, 1fr); gap: 12px; }
 .property-card-wrap { position: relative; width: 100%; min-width: 0; }
-.property-card { position: relative; display: grid; width: 100%; height: clamp(330px, 42dvh, 440px); grid-template-rows: minmax(0, 1fr) auto; align-items: stretch; padding: 0; overflow: hidden; border: 1px solid #e0e6f0; border-radius: 27px; background: #fff; box-shadow: 0 11px 30px rgba(26,40,73,.09); color: #172648; text-align: left; transition: transform .15s ease, box-shadow .15s ease; }
+.property-card { position: relative; display: grid; width: 100%; height: clamp(330px, 42svh, 440px); grid-template-rows: minmax(0, 1fr) auto; align-items: stretch; padding: 0; overflow: hidden; border: 1px solid #e0e6f0; border-radius: 27px; background: #fff; box-shadow: 0 11px 30px rgba(26,40,73,.09); color: #172648; text-align: left; transition: transform .15s ease, box-shadow .15s ease; }
 .property-card-wrap .property-card { width: 100%; }
 .property-card-wrap.dragging { z-index: 5; }
 .property-card-wrap.dragging .property-card { border-color: #607b9c; box-shadow: 0 14px 30px rgba(35,55,88,.18); transform: scale(1.015); }
@@ -212,7 +240,7 @@ button { touch-action: manipulation; }
 .day-cell.selected-day .day-price { color: #dce7ff; }
 .booking-chips { position: absolute; z-index: 2; top: 36px; right: 3px; bottom: 4px; left: 3px; display: grid; grid-template-rows: repeat(4, minmax(0, 1fr)); gap: 3px; pointer-events: none; }
 .booking-chip-placeholder { display: block; height: 26px; }
-.booking-chip { display: flex; min-width: 0; height: auto; flex-direction: column; justify-content: center; padding: 2px 4px; overflow: hidden; border: 1px solid color-mix(in srgb, var(--booking-color, #246bfd) 52%, transparent); border-radius: 7px; background: color-mix(in srgb, var(--booking-color, #246bfd) 38%, transparent); box-shadow: 0 2px 6px color-mix(in srgb, var(--booking-color, #246bfd) 13%, transparent); color: color-mix(in srgb, var(--booking-color, #246bfd) 72%, #172648); line-height: 1.05; text-align: left; pointer-events: auto; backdrop-filter: blur(5px); }
+.booking-chip { display: flex; min-width: 0; height: auto; flex-direction: column; justify-content: center; padding: 2px 4px; overflow: hidden; border: 1px solid color-mix(in srgb, var(--booking-color, #246bfd) 52%, transparent); border-radius: 7px; background: color-mix(in srgb, var(--booking-color, #246bfd) 38%, transparent); box-shadow: 0 2px 6px color-mix(in srgb, var(--booking-color, #246bfd) 13%, transparent); color: color-mix(in srgb, var(--booking-color, #246bfd) 72%, #172648); line-height: 1.05; text-align: left; pointer-events: auto; }
 .booking-chip.checkout-day { width: 50%; justify-self: start; }
 .booking-chip strong { overflow: hidden; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
 .booking-chip small { overflow: hidden; color: inherit; font-size: 8px; opacity: .78; text-overflow: ellipsis; white-space: nowrap; }
@@ -269,6 +297,9 @@ button { touch-action: manipulation; }
 .upcoming-section > h2 { max-width: 520px; margin: 4px 0 2px; color: #172648; font-size: clamp(26px, 7vw, 38px); line-height: 1.08; letter-spacing: -.04em; }
 .upcoming-list { display: grid; gap: 11px; }
 .upcoming-card { display: grid; width: 100%; min-height: 92px; grid-template-columns: 54px minmax(0, 1fr) 18px; gap: 13px; align-items: center; padding: 14px; border: 1px solid #e0e6f0; border-radius: 20px; background: #fff; box-shadow: 0 7px 22px rgba(26,40,73,.05); color: #172648; text-align: left; }
+/* Long lists (hundreds of rows): let Safari skip off-screen rows. Sizes are the rows' content heights. */
+.upcoming-card { content-visibility: auto; contain-intrinsic-size: auto 69px; }
+.search-results .booking-list-item, .payment-results .booking-list-item { content-visibility: auto; contain-intrinsic-size: auto 46px; }
 .upcoming-card:active { transform: scale(.98); }
 .upcoming-icon { display: grid; width: 54px; height: 54px; place-items: center; border-radius: 18px; background: color-mix(in srgb, var(--booking-color) 18%, white); color: var(--booking-color); }
 .upcoming-icon svg { width: 25px; }
@@ -312,7 +343,7 @@ button { touch-action: manipulation; }
 .bottom-selection-bar button { min-height: 42px; border: 0; border-radius: 13px; font-size: 13px; font-weight: 800; }
 .bottom-reset { padding: 0 12px; background: rgba(255,255,255,.12); color: #dce6fb; }
 .bottom-continue { padding: 0 16px; background: #fff; color: #1b57cd; }
-.bottom-nav { position: fixed; z-index: 10; right: 8px; bottom: calc(max(10px, env(safe-area-inset-bottom)) + 8px); left: 8px; display: grid; grid-template-columns: repeat(4, 1fr); width: min(calc(100% - 16px), 744px); height: 66px; margin: auto; padding: 0; border: 1px solid #e1e6ef; border-radius: 20px; background: rgba(255,255,255,.96); box-shadow: 0 10px 30px rgba(24,39,71,.12); backdrop-filter: blur(16px); }
+.bottom-nav { position: fixed; z-index: 10; right: 8px; bottom: calc(max(10px, env(safe-area-inset-bottom)) + 8px); left: 8px; display: grid; grid-template-columns: repeat(4, 1fr); width: min(calc(100% - 16px), 744px); height: 66px; margin: auto; padding: 0; border: 1px solid #e1e6ef; border-radius: 20px; background: #fff; box-shadow: 0 10px 30px rgba(24,39,71,.12); }
 .bottom-nav button { display: flex; flex-direction: column; gap: 3px; align-items: center; justify-content: center; border: 0; background: none; color: #8791a4; font-size: 10px; font-weight: 650; }
 .bottom-nav button.active { color: #246bfd; }
 .bottom-nav svg { width: 21px; height: 21px; }
